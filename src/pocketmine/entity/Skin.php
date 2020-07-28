@@ -24,96 +24,280 @@ declare(strict_types=1);
 namespace pocketmine\entity;
 
 use Ahc\Json\Comment as CommentedJsonDecoder;
+use pocketmine\network\mcpe\protocol\types\PersonaPieceTintColor;
+use pocketmine\network\mcpe\protocol\types\PersonaSkinPiece;
+use pocketmine\network\mcpe\protocol\types\SkinAnimation;
+use pocketmine\network\mcpe\protocol\types\Cape;
+use pocketmine\network\mcpe\protocol\types\SkinData;
+use pocketmine\network\mcpe\protocol\types\SkinImage;
+use pocketmine\utils\UUID;
 use function implode;
 use function in_array;
 use function json_encode;
 use function strlen;
 
 class Skin{
-	public const ACCEPTED_SKIN_SIZES = [
-		64 * 32 * 4,
-		64 * 64 * 4,
-		128 * 128 * 4
-	];
+    public const ACCEPTED_SKIN_SIZES = [
+        64 * 32 * 4,
+        64 * 64 * 4,
+        128 * 64 * 4,
+        128 * 128 * 4,
+        256 * 128 * 4,
+        256 * 256 * 4
+    ];
 
-	/** @var string */
-	private $skinId;
-	/** @var string */
-	private $skinData;
-	/** @var string */
-	private $capeData;
-	/** @var string */
-	private $geometryName;
-	/** @var string */
-	private $geometryData;
+    /** @var string */
+    private $skinId;
+    /** @var string */
+    private $resourcePatch;
+    /** @var SkinImage */
+    private $skinImage;
+    /** @var SkinAnimation[] */
+    private $animations = [];
+    /** @var string */
+    private $geometryData;
+    /** @var string */
+    private $animationData = "";
+    /** @var bool */
+    private $persona = false;
+    /** @var bool */
+    private $premium = false;
+    /** @var Cape */
+    private $cape;
+    /** @var string */
+    private $armSize = SkinData::ARM_SIZE_WIDE;
+    /** @var string */
+    private $skinColor = "";
+    /** @var PersonaSkinPiece[] */
+    private $personaPieces = [];
+    /** @var PersonaPieceTintColor[] */
+    private $pieceTintColors = [];
+    /** @var bool */
+    private $isVerified = true;
 
-	public function __construct(string $skinId, string $skinData, string $capeData = "", string $geometryName = "", string $geometryData = ""){
-		$this->skinId = $skinId;
-		$this->skinData = $skinData;
-		$this->capeData = $capeData;
-		$this->geometryName = $geometryName;
-		$this->geometryData = $geometryData;
-	}
+    /** @var string */
+    private $geometryName = "";
 
-	/**
-	 * @deprecated
-	 */
-	public function isValid() : bool{
-		try{
-			$this->validate();
-			return true;
-		}catch(InvalidSkinException $e){
-			return false;
-		}
-	}
+    public function __construct(string $skinId, string $skinData, string $capeData = "", string $resourcePatch = "", string $geometryData = ""){
+        $this->skinId = $skinId;
+        $this->skinImage = SkinImage::fromLegacy($skinData);
+        $this->resourcePatch = self::generateResourcePatch($resourcePatch, $this->geometryName);
+        $noCape = $capeData === "";
+        $this->cape = new Cape(UUID::fromRandom()->toString(), new SkinImage($noCape ? 0 : 32, $noCape ? 0 : 64, $capeData));
+        $this->geometryData = $geometryData;
+    }
 
-	/**
-	 * @throws InvalidSkinException
-	 */
-	public function validate() : void{
-		if($this->skinId === ""){
-			throw new InvalidSkinException("Skin ID must not be empty");
-		}
-		$len = strlen($this->skinData);
-		if(!in_array($len, self::ACCEPTED_SKIN_SIZES, true)){
-			throw new InvalidSkinException("Invalid skin data size $len bytes (allowed sizes: " . implode(", ", self::ACCEPTED_SKIN_SIZES) . ")");
-		}
-		if($this->capeData !== "" and strlen($this->capeData) !== 8192){
-			throw new InvalidSkinException("Invalid cape data size " . strlen($this->capeData) . " bytes (must be exactly 8192 bytes)");
-		}
-		//TODO: validate geometry
-	}
+    private function generateResourcePatch(string $input, string &$geometryName) : string{
+        $json = @json_decode($input, true) ?? [];
 
-	public function getSkinId() : string{
-		return $this->skinId;
-	}
+        if(isset($json["geometry"]["default"])){
+            $geometryName = $json["geometry"]["default"];
 
-	public function getSkinData() : string{
-		return $this->skinData;
-	}
+            return $input;
+        }
 
-	public function getCapeData() : string{
-		return $this->capeData;
-	}
+        $geometryName = $input;
 
-	public function getGeometryName() : string{
-		return $this->geometryName;
-	}
+        return json_encode([
+            "geometry" => [
+                "default" => $input
+            ]
+        ]);
+    }
 
-	public function getGeometryData() : string{
-		return $this->geometryData;
-	}
+    /**
+     * @deprecated
+     */
+    public function isValid() : bool{
+        try{
+            $this->validate();
+            return true;
+        }catch(InvalidSkinException $e){
+            return false;
+        }
+    }
 
-	/**
-	 * Hack to cut down on network overhead due to skins, by un-pretty-printing geometry JSON.
-	 *
-	 * Mojang, some stupid reason, send every single model for every single skin in the selected skin-pack.
-	 * Not only that, they are pretty-printed.
-	 * TODO: find out what model crap can be safely dropped from the packet (unless it gets fixed first)
-	 */
-	public function debloatGeometryData() : void{
-		if($this->geometryData !== ""){
-			$this->geometryData = (string) json_encode((new CommentedJsonDecoder())->decode($this->geometryData));
-		}
-	}
+    /**
+     * @throws InvalidSkinException
+     */
+    public function validate() : void{
+        if($this->skinId === ""){
+            throw new InvalidSkinException("Skin ID must not be empty");
+        }
+        $len = strlen($this->skinImage->getData());
+        if(!in_array($len, self::ACCEPTED_SKIN_SIZES, true)){
+            throw new InvalidSkinException("Invalid skin data size $len bytes (allowed sizes: " . implode(", ", self::ACCEPTED_SKIN_SIZES) . ")");
+        }
+        $capeData = $this->cape->getImage()->getData();
+        if($capeData !== "" and strlen($capeData) !== 8192){
+            throw new InvalidSkinException("Invalid cape data size " . strlen($capeData) . " bytes (must be exactly 8192 bytes)");
+        }
+        //TODO: validate geometry
+    }
+
+    /**
+     * Hack to cut down on network overhead due to skins, by un-pretty-printing geometry JSON.
+     *
+     * Mojang, some stupid reason, send every single model for every single skin in the selected skin-pack.
+     * Not only that, they are pretty-printed.
+     * TODO: find out what model crap can be safely dropped from the packet (unless it gets fixed first)
+     */
+    public function debloatGeometryData() : void{
+        if($this->geometryData !== ""){
+            $this->geometryData = (string) json_encode((new CommentedJsonDecoder())->decode($this->geometryData));
+        }
+
+        if($this->resourcePatch !== ""){
+            $this->resourcePatch = (string) json_encode((new CommentedJsonDecoder())->decode($this->resourcePatch));
+        }
+    }
+    public function isPremium() : bool{
+        return $this->premium;
+    }
+
+    public function isPersona() : bool{
+        return $this->persona;
+    }
+
+    /**
+     * @return SkinAnimation[]
+     */
+    public function getAnimations() : array{
+        return $this->animations;
+    }
+
+    public function getCape() : Cape{
+        return $this->cape;
+    }
+
+    public function getAnimationData() : string{
+        return $this->animationData;
+    }
+
+    public function getSkinImage() : SkinImage{
+        return $this->skinImage;
+    }
+
+    public function getSkinId() : string{
+        return $this->skinId;
+    }
+
+    public function getGeometryData() : string{
+        return $this->geometryData;
+    }
+
+    public function getResourcePatch() : string{
+        return $this->resourcePatch;
+    }
+
+    /**
+     * @deprecated
+     */
+    public function getSkinData() : string{
+        return $this->getSkinImage()->getData();
+    }
+
+    /**
+     * @deprecated
+     */
+    public function getCapeData() : string{
+        return $this->getCape()->getImage()->getData();
+    }
+
+    /**
+     * @deprecated
+     */
+    public function getGeometryName() : string{
+        return $this->geometryName;
+    }
+
+    public function setSkinImage(SkinImage $skinImage) : Skin{
+        $this->skinImage = $skinImage;
+        return $this;
+    }
+
+    /**
+     * @param SkinAnimation[] $animations
+     */
+    public function setAnimations(array $animations) : Skin{
+        $this->animations = $animations;
+        return $this;
+    }
+
+    public function setAnimationData(string $animationData) : Skin{
+        $this->animationData = $animationData;
+        return $this;
+    }
+
+    public function setPersona(bool $persona) : Skin{
+        $this->persona = $persona;
+        return $this;
+    }
+
+    public function setPremium(bool $premium) : Skin{
+        $this->premium = $premium;
+        return $this;
+    }
+
+    public function setCape(Cape $cape) : Skin{
+        $this->cape = $cape;
+        return $this;
+    }
+
+    public function getArmSize() : string{
+        return $this->armSize;
+    }
+
+    public function setArmSize(string $armSize) : Skin{
+        $this->armSize = $armSize;
+        return $this;
+    }
+
+    public function getSkinColor() : string{
+        return $this->skinColor;
+    }
+
+    public function setSkinColor(string $skinColor) : Skin{
+        $this->skinColor = $skinColor;
+        return $this;
+    }
+
+    /**
+     * @return PersonaSkinPiece[]
+     */
+    public function getPersonaPieces() : array{
+        return $this->personaPieces;
+    }
+
+    /**
+     * @param PersonaSkinPiece[] $personaPieces
+     */
+    public function setPersonaPieces(array $personaPieces) : Skin{
+        $this->personaPieces = $personaPieces;
+        return $this;
+    }
+
+    /**
+     * @return PersonaPieceTintColor[]
+     */
+    public function getPieceTintColors() : array{
+        return $this->pieceTintColors;
+    }
+
+    /**
+     * @param PersonaPieceTintColor[] $pieceTintColors
+     */
+    public function setPieceTintColors(array $pieceTintColors) : Skin{
+        $this->pieceTintColors = $pieceTintColors;
+        return $this;
+    }
+
+    public function isVerified() : bool{
+        return $this->isVerified;
+    }
+
+    public function setVerified(bool $isVerified) : Skin{
+        $this->isVerified = $isVerified;
+        return $this;
+    }
 }

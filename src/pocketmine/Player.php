@@ -3793,7 +3793,7 @@ class Player extends Human implements CommandSender, ChunkLoader, IPlayer{
 		}
 
 		$this->level->dropExperience($this, $ev->getXpDropAmount());
-		$this->setXpAndProgress(0, 0);
+		$this->setXpAndProgress(0, 0.0);
 
 		if($ev->getDeathMessage() != ""){
 			$this->server->broadcastMessage($ev->getDeathMessage());

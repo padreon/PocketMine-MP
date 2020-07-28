@@ -31,8 +31,8 @@ use pocketmine\event\player\PlayerExhaustEvent;
 use pocketmine\event\player\PlayerExperienceChangeEvent;
 use pocketmine\inventory\EnderChestInventory;
 use pocketmine\inventory\EntityInventoryEventProcessor;
-use pocketmine\inventory\InventoryHolder;
 use pocketmine\inventory\PlayerInventory;
+use pocketmine\inventory\InventoryHolder;
 use pocketmine\item\Consumable;
 use pocketmine\item\Durable;
 use pocketmine\item\enchantment\Enchantment;
@@ -43,7 +43,9 @@ use pocketmine\item\Totem;
 use pocketmine\level\Level;
 use pocketmine\nbt\NBT;
 use pocketmine\nbt\tag\ByteArrayTag;
+use pocketmine\nbt\tag\ByteTag;
 use pocketmine\nbt\tag\CompoundTag;
+use pocketmine\nbt\tag\FloatTag;
 use pocketmine\nbt\tag\IntTag;
 use pocketmine\nbt\tag\ListTag;
 use pocketmine\nbt\tag\StringTag;
@@ -56,6 +58,9 @@ use pocketmine\network\mcpe\protocol\PlayerListPacket;
 use pocketmine\network\mcpe\protocol\PlayerSkinPacket;
 use pocketmine\network\mcpe\protocol\types\PlayerListEntry;
 use pocketmine\network\mcpe\protocol\types\SkinAdapterSingleton;
+use pocketmine\network\mcpe\protocol\types\SkinAnimation;
+use pocketmine\network\mcpe\protocol\types\Cape;
+use pocketmine\network\mcpe\protocol\types\SkinImage;
 use pocketmine\Player;
 use pocketmine\utils\UUID;
 use function array_filter;
@@ -121,15 +126,45 @@ class Human extends Creature implements ProjectileSource, InventoryHolder{
 	 * @throws \InvalidArgumentException
 	 */
 	protected static function deserializeSkinNBT(CompoundTag $skinTag) : Skin{
-		$skin = new Skin(
-			$skinTag->getString("Name"),
-			$skinTag->hasTag("Data", StringTag::class) ? $skinTag->getString("Data") : $skinTag->getByteArray("Data"), //old data (this used to be saved as a StringTag in older versions of PM)
-			$skinTag->getByteArray("CapeData", ""),
-			$skinTag->getString("GeometryName", ""),
-			$skinTag->getByteArray("GeometryData", "")
-		);
-		$skin->validate();
-		return $skin;
+        if($skinTag->hasTag("SkinImageHeight", IntTag::class)){
+            $skinImage = new SkinImage($skinTag->getInt("SkinImageHeight"), $skinTag->getInt("SkinImageWidth"), $skinTag->getByteArray("Data"));
+        }else{
+            $skinImage = SkinImage::fromLegacy($skinTag->hasTag("Data", StringTag::class) ? $skinTag->getString("Data") : $skinTag->getByteArray("Data"));
+        }
+
+        $animations = [];
+        if($skinTag->hasTag("AnimatedImageData", ListTag::class)){
+            foreach($skinTag->getListTag("AnimatedImageData")->getValue() as $tag){
+                if($tag instanceof CompoundTag){
+                    $animations[] = new SkinAnimation(new SkinImage($tag->getInt("ImageHeight"), $tag->getInt("ImageWidth"), $tag->getByteArray("Image")), $tag->getByte("Type"), $tag->getFloat("Frames"));
+                }
+            }
+        }
+
+        if(($capeData = $skinTag->getByteArray("CapeData", "")) !== ""){
+            $cape = new Cape(
+                $skinTag->hasTag("CapeId", StringTag::class) ? $skinTag->getString("CapeId") : UUID::fromRandom()->toString(),
+                new SkinImage($skinTag->getInt("CapeImageHeight", 32), $skinTag->getInt("CapeImageWidth", 64), $capeData),
+                boolval($skinTag->getByte("CapeOnClassicSkin", 0)));
+        }else{
+            $cape = new Cape("", new SkinImage(0, 0, ""));
+        }
+
+        $skin = (new Skin(
+            $skinTag->getString("Name"),
+            "",
+            "",
+            $skinTag->hasTag("SkinResourcePatch", ByteArrayTag::class) ? $skinTag->getByteArray("SkinResourcePatch") : $skinTag->getString("GeometryName", ""),
+            $skinTag->getByteArray("GeometryData", "")
+        ))->setSkinImage($skinImage)
+            ->setAnimations($animations)
+            ->setAnimationData($skinTag->getByteArray("SkinAnimationData", ""))
+            ->setCape($cape)
+            ->setPersona(boolval($skinTag->getByte("PersonaSkin", 0)))
+            ->setPremium(boolval($skinTag->getByte("PremiumSkin", 0)));
+
+        $skin->validate();
+        return $skin;
 	}
 
 	/**
